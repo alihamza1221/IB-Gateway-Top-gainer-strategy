@@ -49,9 +49,11 @@ class IBConnectionManager:
     def ensure_connected(self):
         """Check connection and reconnect if necessary."""
         try:
+            print("Checking IB Gateway connection...", self.ib.isConnected())
             if not self.ib.isConnected():
                 logger.warning("Connection lost, attempting to reconnect...")
                 return self.connect()
+            
             return True
         except Exception as e:
             logger.error(f"Error checking connection: {e}")

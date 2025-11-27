@@ -96,6 +96,7 @@ class PreMarketGainerStrategy:
             order.action = 'BUY'
             order.totalQuantity = quantity
             order.orderType = 'MKT'
+            order.outsideRth = True
             
             if self.paper_mode:
                 logger.info("[ENTRY] Paper mode enabled - skipping trade execution")
@@ -107,6 +108,11 @@ class PreMarketGainerStrategy:
             
             est_time = self.get_current_est_time()
             logger.info(f"✓ ENTRY: BUY {quantity} shares of {symbol} at {est_time} EST")
+            logger.info(f"[TRADE] Order status[1]: {trade.orderStatus.status}")
+
+            time.sleep(20)
+            
+    
             logger.info(f"[TRADE] Order status: {trade.orderStatus.status}")
             
             self.active_position = {
@@ -294,7 +300,7 @@ class PreMarketGainerStrategy:
                 # Keep connection alive
                 self.ib_manager.ensure_connected()
                 
-                time.sleep(0.5)
+                time.sleep(1)
                 
         except KeyboardInterrupt:
             logger.info("\nStopping strategy...")
