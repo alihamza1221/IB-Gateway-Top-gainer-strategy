@@ -1,17 +1,17 @@
 # Global Trading Configuration
-ORDER_QUANTITY = 20
+ORDER_QUANTITY = 100
 TIMEZONE = 'US/Eastern'  
 
 # ENTRY: Friday pre-market
-ENTRY_DAY = 0  # moday for testing (4=Friday)
-ENTRY_TIME_HOUR = 16
-ENTRY_TIME_MINUTE = 12
-ENTRY_TIME_SECOND = 0
+ENTRY_DAY = 4  # moday for testing (4=Friday)
+ENTRY_TIME_HOUR = 18
+ENTRY_TIME_MINUTE = 58
+ENTRY_TIME_SECOND = 45
 
 # EXIT: Monday Morning
 EXIT_DAY = 0 # Monday (0=Monday)
-EXIT_TIME_HOUR = 16
-EXIT_TIME_MINUTE = 14
+EXIT_TIME_HOUR = 4
+EXIT_TIME_MINUTE = 1
 EXIT_TIME_SECOND = 0
 
 # IB Gateway Connection

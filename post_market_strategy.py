@@ -24,7 +24,7 @@ class PreMarketGainerStrategy:
         self.ib_manager.connect()
         self.order_quantity = order_quantity
         self.active_position = None
-        self.paper_mode = True
+        self.paper_mode = False
         self.est_tz = pytz.timezone(config.TIMEZONE)
         self.entry_triggered = False
         self.exit_triggered = False
@@ -39,21 +39,21 @@ class PreMarketGainerStrategy:
         est_now = utc_now.astimezone(self.est_tz)
         return est_now
     
-    def get_pre_market_top_gainer(self):
+    def get_post_market_top_gainer(self):
         """Fetch the price of the #1 pre-market top gainer."""
         try:
             ib = self.ib_manager.get_ib()
 
-            logger.info("[SCANNER] Requesting TOP_PERC_GAIN_AFTER_OPEN scanner subscription...")
+            logger.info("[SCANNER] Requesting TOP_AFTER_HOURS_PERC_GAIN scanner subscription...")
 
             scanner = ScannerSubscription(
                 instrument='STK',
                 locationCode='STK.US.MAJOR',
-                scanCode='TOP_AFTER_HOURS_PERC_GAIN'  
+                scanCode='TOP_AFTER_HOURS_PERC_GAIN',  
             )
 
             results = ib.reqScannerSubscription(scanner)
-            ib.sleep(3)  # Wait for results to arrive
+            ib.sleep(8)  # Wait for results to arrive
 
             logger.info(f"[SCANNER] Received {len(results)} results")
 
@@ -64,14 +64,24 @@ class PreMarketGainerStrategy:
                 price = getattr(top_gainer, 'price', None)
                 if price is None:
                     contract = top_gainer.contractDetails.contract
-                    ticker = yf.Ticker(symbol)
-                    current_price = ticker.info['regularMarketPrice']
+                    # ticker = yf.Ticker(symbol)
+                    # current_price = ticker.info['regularMarketPrice']
+                    ticker = ib.reqMktData(contract, '', False, False)
+                    ib.sleep(4)  # small pause to let data arrive
+
+                    ask_price = ticker.ask
+                    bid_price = ticker.bid
+                    last_price = ticker.last
+
+                    print(f"[SCANNER] Fetched market data for {symbol}: bid={bid_price}, ask={ask_price}, last={last_price}")
+                    limit_price = round(ask_price + 0.10, 2)
+
 
                     # Request live market data for the contract
                     #market_data = ib.reqMktData(contract, '', True, False)
-                    ib.sleep(2)
+                    #ib.sleep(2)
                     #price = market_data.last
-                    price = current_price
+                    price = limit_price
 
 
                 logger.info(f"Top pre-market gainer: {symbol} Price: {price}")
@@ -85,7 +95,7 @@ class PreMarketGainerStrategy:
             return None, None
 
     
-    def execute_long_trade(self, symbol, quantity):
+    def execute_long_trade(self, symbol, quantity, price=None):
         """Execute a long (buy) order."""
         try:
             ib = self.ib_manager.get_ib()
@@ -95,15 +105,16 @@ class PreMarketGainerStrategy:
             order = Order()
             order.action = 'BUY'
             order.totalQuantity = quantity
-            order.orderType = 'MKT'
+            order.orderType = 'LMT'
             order.outsideRth = True
+            order.lmtPrice = price
             
             if self.paper_mode:
                 logger.info("[ENTRY] Paper mode enabled - skipping trade execution")
-                print("[paper] entry - would buy", quantity, "shares of", symbol)
+                print("[paper] entry - would buy", quantity, "shares of", symbol, "at limit price", price)
                 return None
             
-            logger.info(f"[TRADE] Placing BUY order for {quantity} shares of {symbol}...")
+            logger.info(f"[TRADE] Placing BUY order for {quantity} shares of {symbol} at limit price {price}...")
             trade = ib.placeOrder(contract, order)
             
             est_time = self.get_current_est_time()
@@ -144,23 +155,35 @@ class PreMarketGainerStrategy:
             quantity = self.active_position['quantity']
             contract = self.active_position['contract']
             
-            if self.paper_mode:
-                logger.info("[EXIT] Paper mode enabled - skipping trade execution")
-                print("[paper]  exit - would sell", quantity, "shares of", symbol)
-                return None
+            ticker = ib.reqMktData(contract, '', False, False)
+            ib.sleep(4)  # small pause to let data arriv
+            ask_price = ticker.ask
+            bid_price = ticker.bid
+            last_price = ticker.last
+            limit_price = round(bid_price - 0.10, 2)
+            print(f"[SCANNER] Fetched market data for {symbol}: bid={bid_price}, ask={ask_price}, last={last_price} , limit price for sell: {limit_price}")
+
+
 
             order = Order()
             order.action = 'SELL'
             order.totalQuantity = quantity
-            order.orderType = 'MKT'
-            
-            logger.info(f"[TRADE] Placing SELL order for {quantity} shares of {symbol}...")
+            order.orderType = 'LMT'
+            order.outsideRth = True
+            order.lmtPrice = limit_price
+
+            logger.info(f"[TRADE] Placing SELL order for {quantity} shares of {symbol} at limit price {limit_price}...")
+            if self.paper_mode:
+                logger.info("[EXIT] Paper mode enabled - skipping trade execution")
+                print("[paper]  exit - would sell", quantity, "shares of", symbol)
+                return None
             trade = ib.placeOrder(contract, order)
             
             exit_time = self.get_current_est_time()
             entry_time = self.active_position['entry_time']
             hold_duration = exit_time - entry_time
-            
+            time.sleep(10)
+
             logger.info(f"\n{'='*60}")
             logger.info(f"✓ EXIT: SELL {quantity} shares of {symbol} at {exit_time} EST")
             logger.info(f"Entry time:  {entry_time}")
@@ -191,15 +214,16 @@ class PreMarketGainerStrategy:
             logger.error("[ENTRY] Cannot execute trade - no connection to IB Gateway")
             return
         
-        logger.info("[ENTRY] Fetching pre-market top gainer...")
-        symbol, price = self.get_pre_market_top_gainer()
+        logger.info("[ENTRY] Fetching post-market top gainer...")
+        symbol, price = self.get_post_market_top_gainer()
         
         if symbol:
             logger.info(f"[ENTRY] Found gainer: {symbol} ({price:.2f})")
             shares = int(self.order_quantity // price)
-            self.execute_long_trade(symbol, shares)
+            print("===shares calculated:", shares)
+            self.execute_long_trade(symbol, shares, price=price)
         else:
-            logger.warning("[ENTRY] Skipping entry - no pre-market top gainer found")
+            logger.warning("[ENTRY] Skipping entry - no post-market top gainer found")
     
     def exit_logic(self):
         """Exit signal - execute at scheduled time."""
