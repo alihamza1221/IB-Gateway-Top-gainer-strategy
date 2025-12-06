@@ -13,7 +13,7 @@ import yfinance as yf
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class PreMarketGainerStrategy:
+class PostMarketGainerStrategy:
     """
     Pre-market gainer strategy with proper threading support.
     IB operations run in main thread, scheduler runs in background.
@@ -303,11 +303,12 @@ class PreMarketGainerStrategy:
         # Start background scheduler thread
         scheduler_thread = threading.Thread(target=self.run_scheduler, daemon=True)
         scheduler_thread.start()
-        
+       
+
         est_time = self.get_current_est_time()
         logger.info(f"Current EST time: {est_time}")
         logger.info("Strategy running. Waiting for scheduled times...\n")
-        
+        health_check_counter = 0
         try:
             while True:
                 # Main thread checks for signals from scheduler
@@ -322,9 +323,15 @@ class PreMarketGainerStrategy:
                     self.exit_logic()
                 
                 # Keep connection alive
-                self.ib_manager.ensure_connected()
-                
-                time.sleep(1)
+                #self.ib_manager.ensure_connected()
+                health_check_counter += 1
+                if health_check_counter >= 120:
+                    health_check_counter = 0
+                    if self.ib_manager.ensure_connected():
+                        logger.debug("[MAIN] Connection health check: OK")
+                    else:
+                        logger.warning("[MAIN] Connection health check: FAILED, attempting reconnect...")
+                time.sleep(0.5)
                 
         except KeyboardInterrupt:
             logger.info("\nStopping strategy...")

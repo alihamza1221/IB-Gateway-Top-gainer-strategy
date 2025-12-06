@@ -1,12 +1,13 @@
 # Global Trading Configuration
-ORDER_QUANTITY = 100
+ORDER_QUANTITY = 1000 # refers to $ amount per trade
 TIMEZONE = 'US/Eastern'  
 
 # ENTRY: Friday pre-market
-ENTRY_DAY = 4  # moday for testing (4=Friday)
-ENTRY_TIME_HOUR = 18
+#0 = Monday, 1=Tuesday, 2=Wednesday, 3=Thursday, 4=Friday, 5=Saturday, 6=Sunday
+ENTRY_DAY = 4  # (4=Friday)
+ENTRY_TIME_HOUR = 19
 ENTRY_TIME_MINUTE = 58
-ENTRY_TIME_SECOND = 45
+ENTRY_TIME_SECOND = 40
 
 # EXIT: Monday Morning
 EXIT_DAY = 0 # Monday (0=Monday)
