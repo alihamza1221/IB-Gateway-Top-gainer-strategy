@@ -39,6 +39,71 @@ class PostMarketGainerStrategy:
         est_now = utc_now.astimezone(self.est_tz)
         return est_now
     
+    def is_derivative_security(self, symbol):
+        """
+        Check if symbol is a warrant, unit, right, or other derivative.
+        Returns True if it should be FILTERED OUT.
+        """
+        symbol_upper = symbol.upper().strip()
+
+        # Warrant patterns (ends with W, WT, WS)
+        if symbol_upper.endswith('W'):
+            return True
+        if symbol_upper.endswith('WT'):
+            return True
+        if symbol_upper.endswith('WS'):
+            return True
+        if '.WS' in symbol_upper or '.WT' in symbol_upper:
+            return True
+
+        # SPAC Unit patterns (ends with U)
+        if symbol_upper.endswith('U'):
+            return True
+        if symbol_upper.endswith('.U'):
+            return True
+
+        # Rights patterns
+        if symbol_upper.endswith('R'):
+            return True
+        if symbol_upper.endswith('.RT'):
+            return True
+
+        # Preferred stock patterns
+        if '-' in symbol_upper:
+            parts = symbol_upper.split('-')
+            if len(parts) > 1 and parts[-1] in ['A', 'B', 'C', 'D', 'E', 'PR']:
+                return True
+
+        return False
+
+
+    def get_first_valid_top_gainer(self, scanner_results):
+       
+        if not scanner_results or len(scanner_results) == 0:
+            logger.warning("[FILTER] No scanner results to filter")
+            return None
+
+        logger.info(f"[FILTER] Filtering {len(scanner_results)} results for non-derivatives...")
+
+        for i, result in enumerate(scanner_results):
+            rank = i + 1
+            symbol = result.contractDetails.contract.symbol
+
+            logger.info(f"[FILTER] Rank #{rank}: Checking {symbol}...")
+
+            # Skip if derivative
+            if self.is_derivative_security(symbol):
+                logger.warning(f"[FILTER] Rank #{rank}: {symbol} is derivative - SKIPPING")
+                continue
+            
+            # Found valid stock - return immediately
+            logger.info(f"[FILTER] ✓ FOUND: {symbol} at rank #{rank} (non-derivative)")
+            return result
+
+        # All results were derivatives
+        logger.error(f"[FILTER] All {len(scanner_results)} results were derivatives")
+        return None
+
     def get_post_market_top_gainer(self):
         """Fetch the price of the #1 pre-market top gainer."""
         try:
@@ -58,7 +123,9 @@ class PostMarketGainerStrategy:
             logger.info(f"[SCANNER] Received {len(results)} results")
 
             if results and len(results) > 0:
-                top_gainer = results[0]
+
+                top_gainer = self.get_first_valid_top_gainer(results)
+
                 symbol = top_gainer.contractDetails.contract.symbol
 
                 price = getattr(top_gainer, 'price', None)
@@ -74,13 +141,11 @@ class PostMarketGainerStrategy:
                     last_price = ticker.last
 
                     print(f"[SCANNER] Fetched market data for {symbol}: bid={bid_price}, ask={ask_price}, last={last_price}")
-                    limit_price = round(ask_price + 0.10, 2)
+                    
+                    #calculate based on spread
+                    limit_price = round(ask_price  + ((abs(ask_price - bid_price) )*2), 2)
+                    ib.cancelMktData(contract)
 
-
-                    # Request live market data for the contract
-                    #market_data = ib.reqMktData(contract, '', True, False)
-                    #ib.sleep(2)
-                    #price = market_data.last
                     price = limit_price
 
 
@@ -160,11 +225,13 @@ class PostMarketGainerStrategy:
             ask_price = ticker.ask
             bid_price = ticker.bid
             last_price = ticker.last
-            limit_price = round(bid_price - 0.10, 2)
+            limit_price = round(bid_price  - ((abs(ask_price - bid_price) )*2), 2)
             print(f"[SCANNER] Fetched market data for {symbol}: bid={bid_price}, ask={ask_price}, last={last_price} , limit price for sell: {limit_price}")
 
-
-
+            ib.cancelMktData(contract)
+            if bid_price is None:
+                logger.error(f"[TRADE] Cannot close position for {symbol} - invalid bid price")
+                raise ValueError("Invalid bid price")
             order = Order()
             order.action = 'SELL'
             order.totalQuantity = quantity
@@ -197,10 +264,13 @@ class PostMarketGainerStrategy:
             return trade
             
         except Exception as e:
-            logger.error(f"[TRADE] Error closing position: {type(e).__name__}: {e}")
-            import traceback
-            logger.error(f"[TRADE] Traceback: {traceback.format_exc()}")
-            return None
+            logger.error(f"[exception found in close_position()] Error closing position: {type(e).__name__}: {e}")
+            if self.ib_manager.ensure_connected() is False:
+                logger.info("[close_position() exception handler] Attempting to reconnect to IB Gateway...")
+                self.ib_manager.connect()
+            logger.info("[close_position() exception handler] Retrying to close position...")
+            self.close_position()
+                
     
     def entry_logic(self):
         """Entry signal - execute at scheduled time."""
@@ -233,8 +303,10 @@ class PostMarketGainerStrategy:
         logger.info(f"{'='*60}")
         
         if not self.ib_manager.ensure_connected():
-            logger.error("[EXIT] Cannot execute trade - no connection to IB Gateway")
-            return
+            logger.error("[exit_logic()] Cannot execute trade - no connection to IB Gateway")
+            logger.info("[exit_logic()] Attempting to reconnect...")
+            self.ib_manager.connect()
+            time.sleep(5)
         
         self.close_position()
     
@@ -328,9 +400,10 @@ class PostMarketGainerStrategy:
                 if health_check_counter >= 120:
                     health_check_counter = 0
                     if self.ib_manager.ensure_connected():
-                        logger.debug("[MAIN] Connection health check: OK")
+                        logger.debug("***[MAIN] Connection health check: OK")
                     else:
-                        logger.warning("[MAIN] Connection health check: FAILED, attempting reconnect...")
+                        self.ib_manager.connect()
+                        logger.warning("**[MAIN] Connection health check: FAILED, attempting reconnect...")
                 time.sleep(0.5)
                 
         except KeyboardInterrupt:
