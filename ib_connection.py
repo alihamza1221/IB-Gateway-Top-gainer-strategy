@@ -54,9 +54,11 @@ class IBConnectionManager:
                 if self.ib is not None and self.ensure_connected() is False:
                     try:
                         logger.info(" connect() :: Cleaning up old connection...")
-                        # Remove event handlers before disconnect
-                        self.ib.errorEvent.clear()
-                        self.ib.disconnectedEvent.clear()
+                        
+                        if hasattr(self.ib, 'errorEvent'):                
+                            self.ib.errorEvent.clear()
+                        if hasattr(self.ib, 'disconnectedEvent'):
+                            self.ib.disconnectedEvent.clear()
                         self.ib.disconnect()
                         
                     except Exception as cleanup_error:
@@ -158,9 +160,13 @@ class IBConnectionManager:
         """Gracefully disconnect from IB Gateway."""
         try:
             if self.ib and self.ensure_connected() is False:
-                # Clear event handlers                    
-                self.ib.errorEvent.clear()
-                self.ib.disconnectedEvent.clear()
+                # Clear    
+                #validate if ib has attribute
+                
+                if hasattr(self.ib, 'errorEvent'):                
+                    self.ib.errorEvent.clear()
+                if hasattr(self.ib, 'disconnectedEvent'):
+                    self.ib.disconnectedEvent.clear()
                 
                 # Disconnect
                 self.ib.disconnect()
