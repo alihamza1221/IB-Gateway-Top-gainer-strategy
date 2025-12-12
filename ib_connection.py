@@ -1,7 +1,8 @@
 import logging
 import time
 from datetime import datetime
-from ib_insync import IB
+from ib_insync import IB, util
+import threading
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,16 +22,20 @@ class IBConnectionManager:
         
         # Initialize state
         self.ib = None
-        self.is_connected = False
-        self.connection_lost = False
+        
+        self.needs_reconnect = False  # Flag for reconnection
         self.last_error_code = None
-        self.reconnecting = False  # Track if we're in reconnect mode
+        self.reconnect_lock = threading.Lock()
+        
+        # Patch asyncio
+        util.patchAsyncio()
+
             
     def _on_error(self, reqId, errorCode, errorString, contract):
         """
         Error callback to catch connection errors.
         """
-        
+        logger.error(f"***_on_error :: reqId: {reqId}, errorCode: {errorCode}, errorString: {errorString}, contract: {contract}")
         # Update last error code
         self.last_error_code = errorCode
         
@@ -39,87 +44,94 @@ class IBConnectionManager:
             logger.error(f"***_on_error {errorCode}] Connection lost: {errorString} reconnecting [True]")
             if self.ib: 
                 logger.info(" _on_error() :: Will call connect()...")
-                self.connect()
+                #self.connect()
+                self.needs_reconnect = True
+
                 
     def connect(self):
         """
         Establish connection to IB Gateway with retry logic.
         Creates a NEW IB() instance to avoid duplicate event handlers.
         """
-        retries = 0
-        
-        while retries < self.max_retries:
-            try:
-                # Clean up old connection if exists
-                if self.ib is not None and self.ensure_connected() is False:
-                    try:
-                        logger.info(" connect() :: Cleaning up old connection...")
-                        
-                        if hasattr(self.ib, 'errorEvent'):                
-                            self.ib.errorEvent.clear()
-                        if hasattr(self.ib, 'disconnectedEvent'):
-                            self.ib.disconnectedEvent.clear()
-                        self.ib.disconnect()
-                        
-                    except Exception as cleanup_error:
-                        logger.warning(f"[CONN] Cleanup error (ignored): {cleanup_error}")
+        with self.reconnect_lock:
+
+            retries = 0
+            while retries < self.max_retries:
+                try:
+                    # Clean up old connection if exists
+                    if self.ib is not None and self.ensure_connected() is False:
+                        try:
+                            logger.info(" connect() :: Cleaning up old connection...")
+
+                            if hasattr(self.ib, 'errorEvent'):                
+                                self.ib.errorEvent.clear()
+                            if hasattr(self.ib, 'disconnectedEvent'):
+                                self.ib.disconnectedEvent.clear()
+                            self.ib.disconnect()
+
+                        except Exception as cleanup_error:
+                            logger.warning(f"[CONN] Cleanup error (ignored):    {cleanup_error}")
+
+                        time.sleep(3)
+
+                    # Create NEW IB instance (prevents duplicate event handlers)
+                    logger.info(" connect() :: Creating new IB instance...")
+                    if self.ib is not None:
+                        del self.ib
+                    self.ib = IB()
+
+                    # Register event handlers on the NEW instance
+                    self.ib.errorEvent += self._on_error
+
+                    # Attempt connection
+                    logger.info(f" connect() :: Attempting to connect to IB Gateway at  {self.host}:{self.port} (attempt {retries + 1}/{self.    max_retries})...")
                     
-                    time.sleep(3)
-                
-                # Create NEW IB instance (prevents duplicate event handlers)
-                logger.info(" connect() :: Creating new IB instance...")
-                if self.ib is not None:
-                    del self.ib
-                self.ib = IB()
-                
-                # Register event handlers on the NEW instance
-                self.ib.errorEvent += self._on_error
-                self.ib.disconnectedEvent += self._on_disconnected
-                
-                # Attempt connection
-                logger.info(f" connect() :: Attempting to connect to IB Gateway at {self.host}:{self.port} (attempt {retries + 1}/{self.max_retries})...")
-                self.ib.connect(self.host, self.port, clientId=self.client_id, timeout=20)
-                
-                # Wait for connection to stabilize
-                self.ib.sleep(10)
-                
-                # Verify connection with test request
-                if self._test_connection():
-                    logger.info(" connect() :: ✓ Connected to IB Gateway successfully")
-                    self.is_connected = True
-                    self.connection_lost = False
-                    self.reconnecting = False
-                    self.last_error_code = None
-                    return True
-                else:
-                    logger.warning(" connect() :: Connection test failed")
+                    
+                    self.ib.connect(self.host, self.port, clientId=self.client_id,  timeout=20)
+
+                    # Wait for connection to stabilize
+                    self.ib.sleep(10)
+
+                    # Verify connection with test request
+                    if self._test_connection():
+                        logger.info(" connect() :: ✓ Connected to IB Gateway   successfully")
+                        self.needs_reconnect = False
+                        self.last_error_code = None
+                        return True
+                    else:
+                        logger.warning(" connect() :: Connection test failed")
+                        retries += 1
+
+                except Exception as e:
                     retries += 1
-                    
-            except Exception as e:
-                retries += 1
-                logger.warning(f" connect() :: Connection failed (attempt {retries}/{self.max_retries}): {e}")
-                
-                if retries < self.max_retries:
-                    logger.info(f" connect() :: Retrying in {self.reconnect_interval} seconds...")
-                    time.sleep(self.reconnect_interval)
-        
-        logger.error(" connect() :: Failed to connect after max retries")
-        return False
+                    logger.warning(f" connect() :: Connection failed (attempt {retries}/    {self.max_retries}): {e}")
+
+                    if retries < self.max_retries:
+                        logger.info(f" connect() :: Retrying in {self.reconnect_interval} seconds...")
+                        time.sleep(self.reconnect_interval)
+                    logger.error("[CONN] Failed to connect after all retries")
+
+
+            logger.error(" connect() :: Failed to connect after max retries")
+            return False
     
     def _test_connection(self):
         """
         Actively test if connection is working.
         """
+        
+        print("Testing connection...")
         try:
             if not self.ib or not self.ib.isConnected():
                 return False
             
             # Request current time as health check
             server_time = self.ib.reqCurrentTime()
-            self.ib.sleep(5)
+            self.ib.sleep(3)
             
-            if server_time is not None:
-                logger.debug(f"[TEST] Server time: {server_time}")
+            
+            if server_time:
+                logger.info(f"[TEST] Server time: {server_time}")
                 return True
             else:
                 logger.warning("[TEST] Invalid server time response")
@@ -143,10 +155,11 @@ class IBConnectionManager:
             logger.warning("ensure_connected(2) :: Socket not connected, reconnecting...")
             return False
         
-        if not self._test_connection():
-            logger.warning("ensure_connected(3) :: Connection test failed, reconnecting...")
+        if self.needs_reconnect and  not self._test_connection():
+            logger.warning("ensure_connected(3) :: Connection test failed and flagged (__onError()),  reconnecting...")
             return False
-                
+        
+        print("Ensure connection [True]")
         # Connection appears healthy
         return True
     
@@ -170,13 +183,11 @@ class IBConnectionManager:
                 
                 # Disconnect
                 self.ib.disconnect()
-                
-                
+                IB.waitOnUpdate(timeout=0.1)
+
+
                 time.sleep(10)
                 
-                
-            self.is_connected = False
-            self.connection_lost = False
             logger.info(" disconnect ():: Disconnected from IB Gateway")
             
         except Exception as e:

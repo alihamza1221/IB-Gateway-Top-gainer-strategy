@@ -397,7 +397,7 @@ class PostMarketGainerStrategy:
                 # Keep connection alive
                 #self.ib_manager.ensure_connected()
                 health_check_counter += 1
-                if health_check_counter >= 120:
+                if health_check_counter >= 10:
                     health_check_counter = 0
                     if self.ib_manager.ensure_connected():
                         logger.debug("***[MAIN] Connection health check: OK")
