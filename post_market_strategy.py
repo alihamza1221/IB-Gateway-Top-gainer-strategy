@@ -164,7 +164,7 @@ class PostMarketGainerStrategy:
             scanner = ScannerSubscription(
                 instrument='STK',
                 locationCode='STK.US.MAJOR',
-                scanCode='TOP_PERC_GAIN',  
+                scanCode='TOP_AFTER_HOURS_PERC_GAIN',  
             )
 
             results = ib.reqScannerSubscription(scanner)
